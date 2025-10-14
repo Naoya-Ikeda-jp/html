@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>写真測色データ整形ツール</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    label { margin-right: 10px; }
+    input[type="number"] { width: 60px; }
+    .form-group { margin-bottom: 10px; }
+    .checkbox-group { display: flex; align-items: center; margin-bottom: 10px; }
+    .checkbox-group input { margin-right: 5px; }
+    textarea { width: 100%; height: 150px; }
+    button { margin-right: 10px; }
+    .instructions { background: #F0F0F0; padding: 10px; margin-top: 20px; border-left: 5px solid #888; }
+  </style>
+</head>
+<body>
+  <h2>写真測色データ整形ツール</h2>
+
+  <div class="form-group">
+    <label>出力されたtxtファイルを選択(デフォルトの測定値_M0.txt)：</label>
+    <input type="file" id="fileInput" accept=".txt" />
+  </div>
+
+  <div class="form-group">
+    <label>台数：</label>
+    <input type="number" id="numUnits" min="1" value="10" />
+    <label>色数：</label>
+    <input type="number" id="numColors" min="1" max="5" value="4" />
+  </div>
+
+  <div class="checkbox-group">
+    <input type="checkbox" id="includeDVis" />
+    <label for="includeDVis">D_VIS列を含める</label>
+  </div>
+
+  <div class="form-group">
+    <button onclick="generateCSV()">CSV生成</button>
+    <button onclick="generateExcel()">Excel生成</button>
+  </div>
+
+  <div class="instructions">
+    <h4>:青い本: 使い方</h4>
+    <ul>
+      <li>出力された.txtファイル(デフォルトの測定値_M0.txt)を選択してください。</li>
+      <li>台数と色数（4または5）を入力してください。</li>
+      <li><strong>D_VIS列を含める</strong>をチェックすると、出力にD_VIS列が含まれます。</li>
+      <li>「CSV生成」または「Excel生成」ボタンを押すと、整形されたファイルがダウンロードされます。</li>
+    </ul>
+    <h4>:めくったページ: 出力仕様</h4>
+    <ul>
+      <li>元データの列（D_VIS, D_RED, D_GREEN, D_BLUE）を色ごとに台数の指定（例：10)行ずつ縦に並べて出力します。</li>
+      <li>列順は属性ごとに全色まとめて表示されます（例：Color1_D_RED, Color2_D_RED, ... → Color1_D_GREEN, ... → Color1_D_BLUE, ...）。</li>
+      <li>D_VISを含める場合は最初に全色分まとめて出力されます。</li>
+      <li>4色の場合は12列（3列 × 4色）、5色の場合は15列（3列 × 5色）になります。D_VISを含めるとそれぞれ16列、20列になります。</li>
+    </ul>
+  </div>
+
+  <script>
+    function parseCgatsData(text) {
+      const lines = text.split(/\r?\n/);
+      const begin = lines.indexOf("BEGIN_DATA");
+      const end = lines.indexOf("END_DATA");
+      const formatStart = lines.indexOf("BEGIN_DATA_FORMAT");
+      const formatEnd = lines.indexOf("END_DATA_FORMAT");
+      const headers = lines.slice(formatStart + 1, formatEnd)[0].trim().split(/\s+/);
+      const dataLines = lines.slice(begin + 1, end).filter(line => line.trim() !== "");
+      const data = dataLines.map(line => line.trim().split(/\s+/).map(parseFloat));
+      return { headers, data };
+    }
+
+    function transposeData(data, headers, numUnits, numColors, includeDVis) {
+      const output = [];
+      const headerRow = [];
+      const groups = includeDVis
+        ? ["D_VIS", "D_RED", "D_GREEN", "D_BLUE"]
+        : ["D_RED", "D_GREEN", "D_BLUE"];
+
+      for (const g of groups) {
+        for (let color = 0; color < numColors; color++) {
+          headerRow.push(`Color${color + 1}_${g}`);
+        }
+      }
+
+      for (let unit = 0; unit < numUnits; unit++) {
+        const row = [];
+        for (const g of groups) {
+          const idx = headers.indexOf(g);
+          for (let color = 0; color < numColors; color++) {
+            const index = unit + color * numUnits;
+            row.push(data[index]?.[idx] ?? "");
+          }
+        }
+        output.push(row);
+      }
+
+      output.unshift(headerRow);
+      return output;
+    }
+
+    function generateCSV() {
+      const file = document.getElementById("fileInput").files[0];
+      const numUnits = parseInt(document.getElementById("numUnits").value);
+      const numColors = parseInt(document.getElementById("numColors").value);
+      const includeDVis = document.getElementById("includeDVis").checked;
+
+      if (!file) return alert("ファイルを選択してください。");
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        const { headers, data } = parseCgatsData(e.target.result);
+        const output = transposeData(data, headers, numUnits, numColors, includeDVis);
+        if (!output) return;
+
+        const csv = output.map(row => row.join(",")).join("\n");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "cgats_transposed.csv";
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+      reader.readAsText(file);
+    }
+
+    function generateExcel() {
+      const file = document.getElementById("fileInput").files[0];
+      const numUnits = parseInt(document.getElementById("numUnits").value);
+      const numColors = parseInt(document.getElementById("numColors").value);
+      const includeDVis = document.getElementById("includeDVis").checked;
+
+      if (!file) return alert("ファイルを選択してください。");
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        const { headers, data } = parseCgatsData(e.target.result);
+        const output = transposeData(data, headers, numUnits, numColors, includeDVis);
+        if (!output) return;
+
+        const ws = XLSX.utils.aoa_to_sheet(output);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "整形データ");
+        XLSX.writeFile(wb, "cgats_transposed.xlsx");
+      };
+      reader.readAsText(file);
+    }
+  </script>
+</body>
+</html>

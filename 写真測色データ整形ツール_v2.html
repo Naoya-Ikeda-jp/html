@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>�ʐ^���F�f�[�^���`�c�[��</title>
+  <title>写真測色データ整形ツール</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 20px; }
@@ -17,43 +17,43 @@
   </style>
 </head>
 <body>
-  <h2>�ʐ^���F�f�[�^���`�c�[��</h2>
+  <h2>写真測色データ整形ツール</h2>
 
   <div class="form-group">
-    <label>�o�͂��ꂽtxt�t�@�C����I��(�f�t�H���g�̑���l_M0.txt)�F</label>
+    <label>出力されたtxtファイルを選択(デフォルトの測定値_M0.txt)：</label>
     <input type="file" id="fileInput" accept=".txt" />
   </div>
 
   <div class="form-group">
-    <label>�䐔�F</label>
+    <label>台数：</label>
     <input type="number" id="numUnits" min="1" value="10" />
-    <label>�F���F</label>
+    <label>色数：</label>
     <input type="number" id="numColors" min="1" max="5" value="4" />
   </div>
 
   <div class="checkbox-group">
     <input type="checkbox" id="includeDVis" />
-    <label for="includeDVis">D_VIS����܂߂�</label>
+    <label for="includeDVis">D_VIS列を含める</label>
   </div>
 
   <div class="form-group">
-    <button onclick="generateCSV()">CSV����</button>
-    <button onclick="generateExcel()">Excel����</button>
+    <button onclick="generateCSV()">CSV生成</button>
+    <button onclick="generateExcel()">Excel生成</button>
   </div>
 
   <div class="instructions">
-    <h4>:���{: �g����</h4>
+    <h4>:青い本: 使い方</h4>
     <ul>
-      <li>�o�͂��ꂽ.txt�t�@�C��(�f�t�H���g�̑���l_M0.txt)��I�����Ă��������B</li>
-      <li>�䐔(10�A50�Ȃ�)�ƐF���i4�܂���5�j����͂��Ă��������B</li>
-      <li><strong>D_VIS����܂߂�</strong>���`�F�b�N����ƁA�o�͂�D_VIS�񂪊܂܂�܂��B</li>
-      <li>�uCSV�����v�܂��́uExcel�����v�{�^���������ƁA���`���ꂽ�t�@�C�����_�E�����[�h����܂��B</li>
+      <li>出力された.txtファイル(デフォルトの測定値_M0.txt)を選択してください。</li>
+      <li>台数(10、50など)と色数（4または5）を入力してください。</li>
+      <li><strong>D_VIS列を含める</strong>をチェックすると、出力にD_VIS列が含まれます。</li>
+      <li>「CSV生成」または「Excel生成」ボタンを押すと、整形されたファイルがダウンロードされます。</li>
     </ul>
-    <h4>:�߂������y�[�W: �o�͎d�l</h4>
+    <h4>:めくったページ: 出力仕様</h4>
     <ul>
-      <li>���f�[�^�̗�iD_VIS, D_RED, D_GREEN, D_BLUE�j��F���Ƃɑ䐔�̎w��i��F10)�s���c�ɕ��ׂďo�͂��܂��B</li>
-      <li>�񏇂͑������ƂɑS�F�܂Ƃ߂ĕ\������܂��i��FColor1_D_RED, Color2_D_RED, ..., YD, Color3_D_RED, ...�j�B</li>
-      <li>YD���4�F�̂Ƃ��̂݋󗓂Ƃ��đ}������A5�F�̂Ƃ���Color3�̒l������܂��B</li>
+      <li>元データの列（D_VIS, D_RED, D_GREEN, D_BLUE）を色ごとに台数の指定（例：10)行ずつ縦に並べて出力します。</li>
+      <li>列順は属性ごとに全色まとめて表示されます（例：Color1_D_RED, Color2_D_RED, ..., YD, Color3_D_RED, ...）。</li>
+      <li>YD列は4色のときのみ空欄として挿入され、5色のときはColor3の値が入ります。</li>
     </ul>
   </div>
 
@@ -82,7 +82,7 @@
           headerRow.push(`Color${color + 1}_${g}`);
         }
         if (numColors === 4) {
-          headerRow.splice(headerRow.length - 2, 0, "YD(��)");
+          headerRow.splice(headerRow.length - 2, 0, "YD(空欄)");
         }
       }
 
@@ -111,7 +111,7 @@
       const numColors = parseInt(document.getElementById("numColors").value);
       const includeDVis = document.getElementById("includeDVis").checked;
 
-      if (!file) return alert("�t�@�C����I�����Ă��������B");
+      if (!file) return alert("ファイルを選択してください。");
 
       const reader = new FileReader();
       reader.onload = function (e) {
@@ -137,7 +137,7 @@
       const numColors = parseInt(document.getElementById("numColors").value);
       const includeDVis = document.getElementById("includeDVis").checked;
 
-      if (!file) return alert("�t�@�C����I�����Ă��������B");
+      if (!file) return alert("ファイルを選択してください。");
 
       const reader = new FileReader();
       reader.onload = function (e) {
@@ -147,7 +147,7 @@
 
         const ws = XLSX.utils.aoa_to_sheet(output);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "���`�f�[�^");
+        XLSX.utils.book_append_sheet(wb, ws, "整形データ");
         XLSX.writeFile(wb, "cgats_transposed.xlsx");
       };
       reader.readAsText(file);

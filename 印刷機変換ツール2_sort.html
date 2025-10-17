@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>i1Profiler ���o�c�[��</title>
+  <title>i1Profiler 抽出ツール</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     body { font-family: Arial; padding: 20px; }
@@ -13,7 +13,7 @@
   </style>
 </head>
 <body>
-  <title>i1Profiler ���o�c�[��</title>
+  <title>i1Profiler 抽出ツール</title>
   <style>
     body { font-family: Arial; padding: 20px; }
     h1 { margin-bottom: 10px; }
@@ -36,31 +36,31 @@
   </style>
 </head>
 <body>
-  <h1>i1Profiler ���o�c�[��</h1>
-  <p><strong>�T�v�F</strong> i1Profiler��HTML���|�[�g����uJapan Color (DeltaE 76)�v�ƃC���f�b�N�X1656��L*a*b*�l�𒊏o���AExcel�`���ŕۑ����܂��B</p>
+  <h1>i1Profiler 抽出ツール</h1>
+  <p><strong>概要：</strong> i1ProfilerのHTMLレポートから「Japan Color (DeltaE 76)」とインデックス1656のL*a*b*値を抽出し、Excel形式で保存します。</p>
 
   <input type="file" id="fileInput" multiple accept=".html">
-  <h2>�ǂݍ��񂾃t�@�C���ꗗ</h2>
+  <h2>読み込んだファイル一覧</h2>
   <div class="file-list" id="fileList"></div>
-  <button id="downloadExcel">Excel�Ƃ��ĕۑ�</button>
+  <button id="downloadExcel">Excelとして保存</button>
 
   <hr>
   <div class="instructions">
-    <h2>:���{: ���̃c�[���̊T�v�Ǝg����</h2>
+    <h2>:青い本: このツールの概要と使い方</h2>
     <ul>
-      <li>���o�ΏہF
+      <li>抽出対象：
         <ul>
-          <li>�uJapan Color (DeltaE 76)�v�̑SDeltaE�l</li>
-          <li>�C���f�b�N�X<strong>1656</strong>�́uL*�v�ua*�v�ub*�v�l</li>
+          <li>「Japan Color (DeltaE 76)」の全DeltaE値</li>
+          <li>インデックス<strong>1656</strong>の「L*」「a*」「b*」値</li>
         </ul>
       </li>
     </ul>
-    <h4>:�`�F�b�N�}�[�N_��: �g����</h4>
+    <h4>:チェックマーク_緑: 使い方</h4>
     <ol>
-      <li>�u�t�@�C���I���v�{�^����HTML�t�@�C����I���i�����j�B</li>
-      <li>�ǂݍ��݊�����A�uExcel�Ƃ��ĕۑ��v���N���b�N�B</li>
-      <li>���o���ʂ�Excel�t�@�C���Ƃ��ă_�E�����[�h����܂��B</li>
-      <li>�t�@�C�����̐擪�ɍ쐬������t�^�A�f�[�^�̕��т͍�����t�@�C�����̏���</li>
+      <li>「ファイル選択」ボタンでHTMLファイルを選択（複数可）。</li>
+      <li>読み込み完了後、「Excelとして保存」をクリック。</li>
+      <li>抽出結果がExcelファイルとしてダウンロードされます。</li>
+      <li>ファイル名の先頭に作成日時を付与、データの並びは左からファイル名の昇順</li>
     </ol>
   </div>
 
@@ -99,7 +99,7 @@
           });
 
           fileData[file.name] = { deltaE: deltaEList, lab: labValues };
-          document.getElementById('fileList').innerHTML += `<div>${file.name} �ǂݍ��݊���</div>`;
+          document.getElementById('fileList').innerHTML += `<div>${file.name} 読み込み完了</div>`;
         };
         reader.readAsText(file, 'UTF-8');
       });
@@ -109,13 +109,13 @@
       const wb = XLSX.utils.book_new();
       const wsData = [];
 
-      const sortedKeys = Object.keys(fileData).sort(); // �t�@�C��������
+      const sortedKeys = Object.keys(fileData).sort(); // ファイル名昇順
 
-      // 1�s�ځF�t�@�C����
+      // 1行目：ファイル名
       const headerRow = ['Japan Color (DeltaE 76)', ...sortedKeys];
       wsData.push(headerRow);
 
-      // DeltaE�l���c�ɕ��ׂ�
+      // DeltaE値を縦に並べる
       const maxLength = Math.max(...Object.values(fileData).map(d => d.deltaE.length));
       for (let i = 0; i < maxLength; i++) {
         const row = [''];
@@ -125,10 +125,10 @@
         wsData.push(row);
       }
 
-      // �󔒍s
+      // 空白行
       wsData.push([]);
 
-      // L*a*b*���x���s�ƒl
+      // L*a*b*ラベル行と値
       const labels = ['L*', 'a*', 'b*'];
       for (let i = 0; i < 3; i++) {
         const row = [labels[i]];
@@ -139,11 +139,11 @@
       }
 
       const ws = XLSX.utils.aoa_to_sheet(wsData);
-      XLSX.utils.book_append_sheet(wb, ws, '���o����');
+      XLSX.utils.book_append_sheet(wb, ws, '抽出結果');
 
       const now = new Date();
-      const timestamp = now.toISOString().replace(/[:\-T]/g, '').slice(0, 12); // ��: 20251017_1346
-      XLSX.writeFile(wb, `${timestamp}_���o����.xlsx`);
+      const timestamp = now.toISOString().replace(/[:\-T]/g, '').slice(0, 12); // 例: 20251017_1346
+      XLSX.writeFile(wb, `${timestamp}_抽出結果.xlsx`);
     });
   </script>
 </body>

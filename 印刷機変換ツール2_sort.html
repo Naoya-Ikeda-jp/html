@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>i1Profiler 抽出ツール</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    h2 { margin-top: 30px; }
+    pre, .file-list { background: #F9F9F9; padding: 10px; border: 1px solid #ccc; white-space: pre-wrap; }
+    button { margin-top: 10px; margin-right: 10px; }
+    .instructions { background: #F0F0F0; padding: 10px; margin-top: 20px; border-left: 5px solid #888; }
+  </style>
+</head>
+<body>
+  <title>i1Profiler 抽出ツール</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    h1 { margin-bottom: 10px; }
+    h2 { margin-top: 30px; }
+    .instructions {
+      background: #F0F0F0;
+      padding: 15px;
+      margin-top: 20px;
+      margin-bottom: 20px;
+      border-left: 5px solid #888;
+    }
+    .file-list {
+      background: #F9F9F9;
+      padding: 10px;
+      border: 1px solid #ccc;
+      margin-top: 10px;
+    }
+    button { margin-top: 15px; margin-right: 10px; }
+    hr { margin: 30px 0; }
+  </style>
+</head>
+<body>
+  <h1>i1Profiler 抽出ツール</h1>
+  <p><strong>概要：</strong> i1ProfilerのHTMLレポートから「Japan Color (DeltaE 76)」とインデックス1656のL*a*b*値を抽出し、Excel形式で保存します。</p>
+
+  <input type="file" id="fileInput" multiple accept=".html">
+  <h2>読み込んだファイル一覧</h2>
+  <div class="file-list" id="fileList"></div>
+  <button id="downloadExcel">Excelとして保存</button>
+
+  <hr>
+  <div class="instructions">
+    <h2>:青い本: このツールの概要と使い方</h2>
+    <ul>
+      <li>抽出対象：
+        <ul>
+          <li>「Japan Color (DeltaE 76)」の全DeltaE値</li>
+          <li>インデックス<strong>1656</strong>の「L*」「a*」「b*」値</li>
+        </ul>
+      </li>
+    </ul>
+    <h4>:チェックマーク_緑: 使い方</h4>
+    <ol>
+      <li>「ファイル選択」ボタンでHTMLファイルを選択（複数可）。</li>
+      <li>読み込み完了後、「Excelとして保存」をクリック。</li>
+      <li>抽出結果がExcelファイルとしてダウンロードされます。</li>
+      <li>ファイル名の先頭に作成日時を付与、データの並びは左からファイル名の昇順</li>
+    </ol>
+  </div>
+
+  <script>
+    let fileData = {};
+
+    document.getElementById('fileInput').addEventListener('change', function(event) {
+      const files = event.target.files;
+      fileData = {};
+      document.getElementById('fileList').innerHTML = '';
+
+      Array.from(files).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const html = e.target.result;
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const rows = doc.querySelectorAll('table.measure tr');
+
+          const deltaEList = [];
+          let labValues = [];
+
+          rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 7) {
+              const index = cells[2].textContent.trim();
+              const deltaE = cells[6].textContent.trim();
+              if (deltaE) deltaEList.push(deltaE);
+              if (index === '1656') {
+                const labRaw = cells[5].textContent.trim().split(/\s+/);
+                if (labRaw.length === 3) {
+                  labValues = labRaw;
+                }
+              }
+            }
+          });
+
+          fileData[file.name] = { deltaE: deltaEList, lab: labValues };
+          document.getElementById('fileList').innerHTML += `<div>${file.name} 読み込み完了</div>`;
+        };
+        reader.readAsText(file, 'UTF-8');
+      });
+    });
+
+    document.getElementById('downloadExcel').addEventListener('click', function() {
+      const wb = XLSX.utils.book_new();
+      const wsData = [];
+
+      const sortedKeys = Object.keys(fileData).sort(); // ファイル名昇順
+
+      // 1行目：ファイル名
+      const headerRow = ['Japan Color (DeltaE 76)', ...sortedKeys];
+      wsData.push(headerRow);
+
+      // DeltaE値を縦に並べる
+      const maxLength = Math.max(...Object.values(fileData).map(d => d.deltaE.length));
+      for (let i = 0; i < maxLength; i++) {
+        const row = [''];
+        for (const fname of sortedKeys) {
+          row.push(fileData[fname].deltaE[i] || '');
+        }
+        wsData.push(row);
+      }
+
+      // 空白行
+      wsData.push([]);
+
+      // L*a*b*ラベル行と値
+      const labels = ['L*', 'a*', 'b*'];
+      for (let i = 0; i < 3; i++) {
+        const row = [labels[i]];
+        for (const fname of sortedKeys) {
+          row.push(fileData[fname].lab[i] || '');
+        }
+        wsData.push(row);
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      XLSX.utils.book_append_sheet(wb, ws, '抽出結果');
+
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:\-T]/g, '').slice(0, 12); // 例: 20251017_1346
+      XLSX.writeFile(wb, `${timestamp}_抽出結果.xlsx`);
+    });
+  </script>
+</body>
+</html>

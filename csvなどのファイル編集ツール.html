@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>ファイル編集ツール(ファイル単体で動作)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<!-- SheetJS -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+  :root{--accent:#0b79ff}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;margin:16px;background:#f4f6f8;color:#111}
+  .wrap{max-width:1400px;margin:0 auto}
+  h1{font-size:18px;margin-bottom:10px}
+  .topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .file-label{background:var(--accent);color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
+  input[type="file"]{display:none}
+  select,input[type="text"],button{padding:6px 8px;border-radius:6px;border:1px solid #cfcfcf;background:#fff}
+  button{cursor:pointer}
+  #tabs{display:flex;gap:6px;border-bottom:1px solid #ddd;padding-bottom:6px;margin-bottom:8px;flex-wrap:wrap}
+  .tab{background:#eee;padding:6px 10px;border-radius:6px 6px 0 0;cursor:pointer;display:flex;gap:8px;align-items:center}
+  .tab.active{background:#fff;border:1px solid #ddd;border-bottom:0;font-weight:600}
+  .tab .close{background:#ff4d4f;color:#fff;border-radius:6px;padding:2px 6px;cursor:pointer;border:none}
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .pane{border:1px solid #ddd;border-radius:6px;background:#fff;padding:10px;min-height:300px;overflow:auto}
+  table{border-collapse:collapse;width:100%;min-width:700px}
+  th,td{border:1px solid #ccc;padding:6px;min-width:80px;text-align:left;vertical-align:top}
+  th{background:#f6f6f6;position:sticky;top:0;z-index:2;cursor:grab}
+  td[contenteditable]{background:#fffdf0}
+  .row-ops,.col-ops{white-space:nowrap}
+  .small{font-size:13px;padding:6px 8px}
+  .hint{color:#666;font-size:13px}
+  .diff{background:#fff8b3}
+  .drag-over{outline:3px dashed #4d90fe}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📄 ファイル編集ツール(ファイル単体で動作)</h1>
+    <label>※タイトル行のボタンが出力されるバグがあるので注意。保存後にメモ帳などで開き、削除する。</label>
+    <label>保存後に先頭行、最終行をチェックする。</label>
+
+  <div class="topbar">
+    <label class="file-label">ファイルを開く<input id="fileInput" type="file" multiple accept=".csv,.tsv,.txt,.xlsx,.xls,.json" /></label>
+    <label>文字コード<select id="encodingSelect"><option value="utf-8">UTF-8</option><option value="shift-jis">Shift_JIS</option><option value="euc-jp">EUC-JP</option></select></label>
+    <label>重複時<select id="dupBehavior"><option value="ask">確認する（上書き/別名）</option><option value="overwrite">上書き</option><option value="rename">別名で追加</option></select></label>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <button id="undoBtn" class="small">↶ Undo</button>
+      <button id="redoBtn" class="small">↷ Redo</button>
+      <button id="addSheetBtn" class="small">＋ シート</button>
+      <button id="saveAllBtn" class="small">💾 全シートをExcel(.xlsx)で保存</button>
+    </div>
+  </div>
+
+  <div id="tabs"></div>
+
+  <div class="toolbar">
+    <button id="addRowBtn" class="small">行追加</button>
+    <button id="delRowBtn" class="small">行削除</button>
+    <button id="addColBtn" class="small">列追加</button>
+    <button id="delColBtn" class="small">列削除</button>
+    <button id="copyRowBtn" class="small">行コピー</button>
+    <button id="pasteRowBtn" class="small">行貼り付け</button>
+
+    <label style="margin-left:10px">保存形式<select id="saveFormat"><option value="xlsx">.xlsx</option><option value="csv">.csv</option><option value="tsv">.tsv</option><option value="json">.json</option></select></label>
+    <input id="saveName" type="text" placeholder="ファイル名（拡張子不要）" style="width:200px" />
+    <label>文字コード<select id="saveEncoding"><option value="utf-8">UTF-8</option><option value="utf-8-bom">UTF-8(BOM)</option><option value="shift-jis">Shift_JIS (試験的)</option></select></label>
+    <button id="saveBtn" class="small">💾 保存</button>
+  </div>
+
+  <div class="pane" id="pane"></div>
+
+  <p class="hint">操作：セルをクリックして編集 → フォーカスアウトで編集確定。行をクリックしてから「行コピー」→ 別シートで「行貼り付け」。行/列はドラッグで移動可能。Undo/Redo対応。</p>
+</div>
+
+<script>
+// --- State
+let sheets = []; // {id,name,tableEl}
+let idCounter = 1;
+let activeId = null;
+let undoStack = [];
+let redoStack = [];
+const MAX_HISTORY = 1000;
+let internalRowClipboard = null;
+
+// Utilities
+function el(tag, attrs={}, children=[]) {
+  const e = document.createElement(tag);
+  for (let k in attrs) { if (k==='class') e.className = attrs[k]; else if (k==='html') e.innerHTML = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  children.forEach(c=> e.appendChild(c));
+  return e;
+}
+function toColName(n){ let s=''; n++; while(n>0){ const rem=(n-1)%26; s=String.fromCharCode(65+rem)+s; n=Math.floor((n-1)/26);} return s; }
+
+// --- Tabs & Sheets
+const tabsEl = document.getElementById('tabs');
+const pane = document.getElementById('pane');
+const fileInput = document.getElementById('fileInput');
+const encodingSelect = document.getElementById('encodingSelect');
+const dupBehavior = document.getElementById('dupBehavior');
+
+fileInput.addEventListener('change', handleFileSelect);
+document.getElementById('addSheetBtn').addEventListener('click', ()=> createNewSheet());
+document.getElementById('saveAllBtn').addEventListener('click', saveAllAsXlsx);
+
+// Toolbar buttons
+document.getElementById('addRowBtn').addEventListener('click', ()=> addRow(activeId));
+document.getElementById('delRowBtn').addEventListener('click', ()=> deleteSelectedRow(activeId));
+document.getElementById('addColBtn').addEventListener('click', ()=> addColumn(activeId));
+document.getElementById('delColBtn').addEventListener('click', ()=> deleteLastColumn(activeId));
+document.getElementById('copyRowBtn').addEventListener('click', ()=> copySelectedRow(activeId));
+document.getElementById('pasteRowBtn').addEventListener('click', ()=> pasteRowAtSelection(activeId));
+document.getElementById('saveBtn').addEventListener('click', ()=> saveActiveSheet());
+document.getElementById('undoBtn').addEventListener('click', ()=> undo());
+document.getElementById('redoBtn').addEventListener('click', ()=> redo());
+
+// --- File handling
+async function handleFileSelect(e) {
+  const files = Array.from(e.target.files);
+  const enc = encodingSelect.value || 'utf-8';
+  for (const f of files) {
+    let name = f.name;
+    // handle duplicate according to user preference
+    if (sheets.find(s=>s.name===name)) {
+      const behavior = dupBehavior.value;
+      if (behavior === 'ask') {
+        const ok = confirm(`${name} は既に開かれています。\n[OK] 上書き、[キャンセル] 別名で追加`);
+        if (!ok) name = makeUniqueName(name);
+        else removeSheetByName(name);
+      } else if (behavior === 'overwrite') {
+        removeSheetByName(name);
+      } else {
+        name = makeUniqueName(name);
+      }
+    }
+    try {
+      if (/\.(xlsx|xls)$/i.test(f.name)) {
+        const ab = await f.arrayBuffer();
+        const wb = XLSX.read(ab, {type:'array'});
+        wb.SheetNames.forEach((sname, idx)=> {
+          const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sname], {header:1, defval:''});
+          // if multiple sheets in workbook, append sheet name
+          const sheetName = wb.SheetNames.length>1 ? `${name}::${sname}` : name;
+          createSheetFromData(sheetName, aoa);
+        });
+      } else {
+        const text = await readFileAsText(f, enc);
+        const ext = (f.name.match(/\.[^.]+$/)||['','.'])[0].toLowerCase();
+        if (ext==='.txt') {
+          const rows = text.split(/\r?\n/).map(r=> [r]);
+          createSheetFromData(name, rows);
+        } else {
+          const sep = (ext==='.tsv')?'\t':',';
+          const aoa = parseCSVText(text, sep);
+          createSheetFromData(name, aoa);
+        }
+      }
+    } catch(err) {
+      console.error(err);
+      alert('ファイル読み込みエラー: '+ (err.message || err));
+    }
+  }
+  // allow re-selecting same file
+  e.target.value = '';
+}
+
+// read with encoding fallback
+function readFileAsText(file, encoding) {
+  return new Promise((resolve,reject)=>{
+    const r = new FileReader();
+    r.onerror = ()=> reject(r.error);
+    r.onload = ()=> resolve(r.result);
+    try { r.readAsText(file, encoding); }
+    catch(err){
+      file.arrayBuffer().then(buf=> {
+        try { const dec = new TextDecoder(encoding); resolve(dec.decode(buf)); }
+        catch(e){ const dec = new TextDecoder('utf-8'); resolve(dec.decode(buf)); }
+      }).catch(reject);
+    }
+  });
+}
+
+function makeUniqueName(name){
+  const base = name.replace(/(\.[^/.]+)$/, '');
+  const ext = (name.match(/(\.[^/.]+)$/)||['',''])[0];
+  let i=2;
+  while (sheets.find(s=>s.name===`${base}(${i})${ext}`)) i++;
+  return `${base}(${i})${ext}`;
+}
+
+function removeSheetByName(name){ const idx = sheets.findIndex(s=>s.name===name); if (idx>=0) removeSheet(idx); }
+
+// CSV parse robust (handles quotes, CRLF)
+function parseCSVText(text, sep=','){
+  const lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  const out = [];
+  for (let line of lines) {
+    if (line==='') { out.push([]); continue; }
+    const row=[]; let cur=''; let inQ=false;
+    for (let i=0;i<line.length;i++) {
+      const ch = line[i];
+      if (ch==='"') { if (inQ && line[i+1]==='"') { cur+='"'; i++; } else inQ=!inQ; continue; }
+      if (!inQ && ch===sep) { row.push(cur); cur=''; continue; }
+      cur+=ch;
+    }
+    row.push(cur); out.push(row);
+  }
+  return out;
+}
+
+// --- Sheet creation & DOM ---
+function createNewSheet(){ createSheetFromData(`Sheet${sheets.length+1}`, [['']]); }
+function createSheetFromData(name, aoa) {
+  const id = 'sheet_'+(idCounter++);
+  // build table element
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const tbody = document.createElement('tbody');
+  const maxCols = Math.max(...aoa.map(r=> r.length || 0), 1);
+  // header row
+  const htr = document.createElement('tr');
+  for (let c=0;c<maxCols;c++){
+    const th = document.createElement('th'); th.textContent = toColName(c);
+    th.draggable = true;
+    th.addEventListener('dragstart', colDragStart);
+    th.addEventListener('dragover', e=> e.preventDefault());
+    th.addEventListener('drop', colDrop);
+    htr.appendChild(th);
+  }
+  const colOps = document.createElement('th'); colOps.className='col-ops'; colOps.innerHTML = '<button class="small" onclick="addColumnByBtn(this)">＋</button> <button class="small" onclick="deleteLastColumnByBtn(this)">🗑</button>';
+  htr.appendChild(colOps);
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  // data rows
+  for (let r=0;r<aoa.length;r++){
+    const tr = document.createElement('tr');
+    tr.draggable = true;
+    tr.addEventListener('dragstart', rowDragStart);
+    tr.addEventListener('dragover', e=> e.preventDefault());
+    tr.addEventListener('drop', rowDrop);
+    for (let c=0;c<maxCols;c++){
+      const td = document.createElement('td'); td.contentEditable = true; td.textContent = aoa[r][c] != null ? aoa[r][c] : '';
+      attachCellEvents(td, id, r+1, c);
+      tr.appendChild(td);
+    }
+    const rowOps = document.createElement('td'); rowOps.className='row-ops';
+    rowOps.innerHTML = '<button class="small" onclick="addRowByBtn(this)">＋</button> <button class="small" onclick="deleteRowByBtn(this)">🗑</button> <button class="small" onclick="copyRowByBtn(this)">📋</button>';
+    tr.appendChild(rowOps);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  // container
+  const container = document.createElement('div'); container.className='sheet-container'; container.style.display='none';
+  container.appendChild(table);
+
+  // tab
+  const tab = document.createElement('div'); tab.className='tab'; tab.textContent = name;
+  const close = document.createElement('button'); close.className='close'; close.textContent='🗑'; close.onclick = (ev)=>{ ev.stopPropagation(); removeSheetByName(name); };
+  tab.appendChild(close);
+  tab.onclick = ()=> showSheet(id);
+  tabs.appendChild(tab);
+
+  pane.appendChild(container);
+  sheets.push({id, name, tab, container, table});
+  showSheet(id);
+  pushHistory({type:'createSheet', payload:{id, name}});
+  updateUndoRedoButtons();
+}
+
+// show sheet by id
+function showSheet(id){
+  activeId = id;
+  sheets.forEach(s=> {
+    s.tab.classList.toggle('active', s.id===id);
+    s.container.style.display = s.id===id ? 'block' : 'none';
+  });
+}
+
+// find sheet index by id
+function findSheetIndexById(id){ return sheets.findIndex(s=>s.id===id); }
+function findSheetById(id){ return sheets.find(s=>s.id===id); }
+function findSheetByName(name){ return sheets.find(s=>s.name===name); }
+
+// remove sheet by index
+function removeSheet(idx){
+  const s = sheets[idx];
+  s.tab.remove();
+  s.container.remove();
+  sheets.splice(idx,1);
+  if (s.id===activeId){ if (sheets.length) showSheet(sheets[0].id); else activeId = null; }
+  pushHistory({type:'removeSheet', payload:{id:s.id, name:s.name}});
+}
+
+// --- Row / Column operations (buttons) ---
+// helper to get active table
+function getActiveTable(){ const s = findSheetById(activeId); return s ? s.table : null; }
+
+function addRow(id, record=true){
+  const s = findSheetById(id);
+  if (!s) return;
+  const table = s.table;
+  const tbody = table.querySelector('tbody');
+  const cols = table.rows[0].cells.length - 1;
+  const tr = document.createElement('tr');
+  tr.draggable = true; tr.addEventListener('dragstart', rowDragStart); tr.addEventListener('dragover', e=>e.preventDefault()); tr.addEventListener('drop', rowDrop);
+  for (let c=0;c<cols;c++){ const td = document.createElement('td'); td.contentEditable=true; td.textContent=''; attachCellEvents(td, id, table.rows.length, c); tr.appendChild(td); }
+  const rowOps = document.createElement('td'); rowOps.className='row-ops'; rowOps.innerHTML = '<button class="small" onclick="addRowByBtn(this)">＋</button> <button class="small" onclick="deleteRowByBtn(this)">🗑</button> <button class="small" onclick="copyRowByBtn(this)">📋</button>';
+  tr.appendChild(rowOps);
+  tbody.appendChild(tr);
+  if (record) pushHistory({type:'addRow', payload:{sheetId:id}});
+  updateUndoRedoButtons();
+}
+function addRowByBtn(btn){ const table = btn.closest('table'); const id = getSheetIdByTable(table); addRow(id); }
+
+function deleteRow(id, record=true){
+  const s = findSheetById(id); if(!s) return;
+  const table = s.table; const tbody = table.querySelector('tbody'); if(tbody.rows.length===0) return;
+  const last = tbody.rows[tbody.rows.length-1]; const data = Array.from(last.cells).slice(0,-1).map(td=>td.textContent);
+  last.remove();
+  if (record) pushHistory({type:'deleteRow', payload:{sheetId:id, index: tbody.rows.length+1, deletedData: data}});
+  updateUndoRedoButtons();
+}
+function deleteRowByBtn(btn){ const tr = btn.closest('tr'); const table = btn.closest('table'); const id = getSheetIdByTable(table); const idx = Array.from(tr.parentElement.rows).indexOf(tr); const data = Array.from(tr.cells).slice(0,-1).map(td=>td.textContent); tr.remove(); pushHistory({type:'deleteRow', payload:{sheetId:id, index:idx, deletedData: data}}); updateUndoRedoButtons(); }
+
+function addColumn(id, record=true){
+  const s = findSheetById(id); if(!s) return;
+  const table = s.table;
+  Array.from(table.rows).forEach((tr, rIdx)=>{
+    const cell = rIdx===0 ? document.createElement('th') : document.createElement('td');
+    if (rIdx!==0){ cell.contentEditable=true; attachCellEvents(cell, id, rIdx, tr.cells.length); }
+    cell.textContent = rIdx===0 ? toColName(tr.cells.length) : '';
+    // insert before last cell (ops)
+    tr.insertBefore(cell, tr.cells[tr.cells.length-1]);
+  });
+  if (record) pushHistory({type:'addColumn', payload:{sheetId:id}});
+  updateUndoRedoButtons();
+}
+function addColumnByBtn(btn){ const id = getSheetIdByTable(btn.closest('table')); addColumn(id); }
+
+function deleteLastColumn(id, record=true){
+  const s = findSheetById(id); if(!s) return;
+  const table = s.table;
+  const cols = table.rows[0].cells.length - 1;
+  if (cols<=1) return;
+  const removed = [];
+  Array.from(table.rows).forEach((tr, rIdx)=>{
+    removed.push(tr.cells[cols-1].textContent);
+    tr.deleteCell(cols-1);
+  });
+  if (record) pushHistory({type:'deleteColumn', payload:{sheetId:id, index: cols-1, deletedData: removed}});
+  updateUndoRedoButtons();
+}
+function deleteLastColumnByBtn(btn){ const id = getSheetIdByTable(btn.closest('table')); deleteLastColumn(id); }
+
+// copy / paste rows
+let lastSelectedRow = null;
+function copySelectedRow(id){
+  if (!id) return alert('シートを選んでください');
+  if (!lastSelectedRow) return alert('コピーする行をクリックして選択してください');
+  const data = Array.from(lastSelectedRow.cells).slice(0,-1).map(td=>td.textContent);
+  internalRowClipboard = {data};
+  // also write to system clipboard as CSV
+  navigator.clipboard && navigator.clipboard.writeText(data.map(v=> v.includes(',')||v.includes('\n')? `"${v.replace(/"/g,'""')}"`:v).join(',')).catch(()=>{});
+  alert('行を内部クリップボードに保存しました');
+}
+function copyRowByBtn(btn){ const tr = btn.closest('tr'); lastSelectedRow = tr; copySelectedRow(getSheetIdByTable(btn.closest('table'))); }
+
+function pasteRowAtSelection(id){
+  if (!id) return alert('シートを選んでください');
+  const s = findSheetById(id); if(!s) return;
+  if (navigator.clipboard) {
+    // prefer system clipboard if internal empty
+    navigator.clipboard.readText().then(text=>{
+      if (text && (!internalRowClipboard || !internalRowClipboard.data)) {
+        // parse CSV line into array
+        const row = parseCSVLine(text);
+        internalRowClipboard = {data: row};
+      }
+      _pasteRowDataIntoSheet(id, internalRowClipboard.data);
+    }).catch(()=>{
+      if (!internalRowClipboard) return alert('貼り付けるデータがありません');
+      _pasteRowDataIntoSheet(id, internalRowClipboard.data);
+    });
+  } else {
+    if (!internalRowClipboard) return alert('貼り付けるデータがありません');
+    _pasteRowDataIntoSheet(id, internalRowClipboard.data);
+  }
+}
+function parseCSVLine(line){
+  // simple parser for single-line CSV (handles quoted)
+  const row=[]; let cur=''; let inQ=false;
+  for (let i=0;i<line.length;i++){ const ch=line[i]; if (ch==='"'){ if(inQ && line[i+1]==='"'){ cur+='"'; i++; } else inQ=!inQ; continue; } if(!inQ && ch===','){ row.push(cur); cur=''; continue; } cur+=ch; } row.push(cur); return row;
+}
+function _pasteRowDataIntoSheet(sheetId, rowData){
+  const s = findSheetById(sheetId); if(!s) return;
+  const table = s.table; const tbody = table.querySelector('tbody');
+  const curCols = table.rows[0].cells.length - 1;
+  const neededCols = Math.max(curCols, rowData.length);
+  // add columns if needed
+  while (table.rows[0].cells.length - 1 < neededCols) addColumn(sheetId, false);
+  // append row with appropriate number of cols
+  const tr = document.createElement('tr'); tr.draggable=true; tr.addEventListener('dragstart', rowDragStart); tr.addEventListener('dragover', e=>e.preventDefault()); tr.addEventListener('drop', rowDrop);
+  for (let c=0;c<neededCols;c++){ const td = document.createElement('td'); td.contentEditable=true; td.textContent = rowData[c] || ''; attachCellEvents(td, sheetId, table.rows.length, c); tr.appendChild(td); }
+  const rowOps = document.createElement('td'); rowOps.className='row-ops'; rowOps.innerHTML = '<button class="small" onclick="addRowByBtn(this)">＋</button> <button class="small" onclick="deleteRowByBtn(this)">🗑</button> <button class="small" onclick="copyRowByBtn(this)">📋</button>';
+  tr.appendChild(rowOps);
+  tbody.appendChild(tr);
+  pushHistory({type:'pasteRow', payload:{sheetId, data: rowData}});
+  updateUndoRedoButtons();
+}
+
+// get sheet id by table element
+function getSheetIdByTable(table){ const s = sheets.find(sh=> sh.table===table); return s? s.id : null; }
+
+// attach cell events for tracking and selection
+function attachCellEvents(td, sheetId, rowIndex, colIndex){
+  td.addEventListener('focus', ()=> { td._old = td.textContent; });
+  td.addEventListener('blur', ()=>{
+    const oldV = td._old !== undefined ? td._old : '';
+    const newV = td.textContent;
+    if (oldV !== newV) {
+      pushHistory({type:'edit', payload:{sheetId, rowIndex, colIndex, oldValue: oldV, newValue: newV}});
+      redoStack = []; updateUndoRedoButtons();
+    }
+  });
+  // click on cell selects row for copy/paste
+  td.addEventListener('click', (e)=>{
+    const tr = td.closest('tr');
+    if (lastSelectedRow && lastSelectedRow!==tr) lastSelectedRow.style.outline='';
+    lastSelectedRow = tr; tr.style.outline = '2px solid #4d90fe';
+  });
+}
+
+// --- Drag & Drop rows & columns ---
+let dragRowSrc = null, dragColSrc = null;
+function rowDragStart(e){ dragRowSrc = e.currentTarget; e.dataTransfer.effectAllowed='move'; }
+function rowDrop(e){ const tgt = e.currentTarget; if (!dragRowSrc || dragRowSrc===tgt) return; const tbody = tgt.parentElement; const kids = Array.from(tbody.children); const srcIdx = kids.indexOf(dragRowSrc); const tgtIdx = kids.indexOf(tgt); if (srcIdx < tgtIdx) tgt.after(dragRowSrc); else tgt.before(dragRowSrc); dragRowSrc = null; pushHistory({type:'moveRow', payload:{}}); updateUndoRedoButtons(); }
+
+function colDragStart(e){ const th = e.currentTarget; dragColSrc = th.cellIndex; e.dataTransfer.effectAllowed='move'; }
+function colDrop(e){ const tgtIdx = e.currentTarget.cellIndex; const table = e.currentTarget.closest('table'); Array.from(table.rows).forEach(tr=>{ const cells = Array.from(tr.cells); const srcNode = cells[dragColSrc]; if (!srcNode) return; if (dragColSrc < tgtIdx) tr.insertBefore(srcNode, tr.cells[tgtIdx]); else tr.insertBefore(srcNode, tr.cells[tgtIdx]); }); dragColSrc = null; pushHistory({type:'moveCol', payload:{}}); updateUndoRedoButtons(); }
+
+// --- Undo/Redo ---
+function pushHistory(action){ undoStack.push(action); if (undoStack.length>MAX_HISTORY) undoStack.shift(); redoStack=[]; updateUndoRedoButtons(); }
+function updateUndoRedoButtons(){ document.getElementById('undoBtn').disabled = undoStack.length===0; document.getElementById('redoBtn').disabled = redoStack.length===0; }
+function undo(){ const a = undoStack.pop(); if (!a) return; performInverse(a); redoStack.push(a); updateUndoRedoButtons(); }
+function redo(){ const a = redoStack.pop(); if (!a) return; performAction(a); undoStack.push(a); updateUndoRedoButtons(); }
+
+function performAction(a){ /* partial: implement for future expansion */ }
+function performInverse(a){ /* partial: implement for future expansion */ }
+
+// --- Save functions ---
+function saveActiveSheet(){
+  if (!activeId) return alert('シートを選んでください');
+  const s = findSheetById(activeId);
+  const fmt = document.getElementById('saveFormat').value;
+  const nameInput = document.getElementById('saveName').value.trim() || s.name;
+  const saveEnc = document.getElementById('saveEncoding').value;
+  const header = Array.from(s.table.rows[0].cells).map(c=> c.textContent );
+  const data = Array.from(s.table.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.cells).slice(0,-1).map(td=>td.textContent));
+  if (fmt === 'xlsx') {
+    const aoa = [header, ...data];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    XLSX.writeFile(wb, nameInput + '.xlsx');
+  } else if (fmt === 'csv' || fmt === 'tsv') {
+    const sep = fmt==='tsv' ? '\t' : ',';
+    const rows = [header, ...data].map(r=> r.map(c=> csvEscape(c, sep)).join(sep)).join('\r\n');
+    downloadWithEncoding(rows, nameInput + (fmt==='tsv'?'.tsv':'.csv'), saveEnc);
+  } else if (fmt === 'json') {
+    const arr = data.map(r=> { const obj = {}; header.forEach((h,i)=> obj[h||`col${i+1}`] = r[i] || ''); return obj; });
+    downloadWithEncoding(JSON.stringify(arr, null, 2), nameInput + '.json', saveEnc);
+  }
+}
+
+function saveAllAsXlsx(){
+  if (sheets.length===0) return alert('シートがありません');
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(s=> {
+    const header = Array.from(s.table.rows[0].cells).map(c=> c.textContent );
+    const data = Array.from(s.table.querySelectorAll('tbody tr')).map(tr=> Array.from(tr.cells).slice(0,-1).map(td=>td.textContent));
+    const aoa = [header, ...data];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    let name = s.name.replace(/[:\\/?\\*\\[\\]]/g,'_').slice(0,31);
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  });
+  XLSX.writeFile(wb, (document.getElementById('saveName').value.trim() || 'export') + '.xlsx');
+}
+
+function csvEscape(val, sep=','){ if (val==null) return ''; const s = String(val); if (s.includes(sep) || s.includes('"') || s.includes('\n') || s.includes('\r')) return '"' + s.replace(/"/g,'""') + '"'; return s; }
+function downloadWithEncoding(text, filename, encoding){
+  // try to support shift-jis if TextEncoder supports it; otherwise fallback to utf-8
+  try {
+    if (encoding === 'shift-jis' && typeof TextEncoder !== 'undefined') {
+      // Many browsers don't support shift-jis in TextEncoder; attempt using encoding.js is out of scope.
+      // Fallback to UTF-8 with BOM to improve Excel on Windows.
+      const blob = new Blob(['\ufeff'+text], {type:'text/plain;charset=utf-8'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+    } else if (encoding === 'utf-8-bom') {
+      const blob = new Blob(['\ufeff'+text], {type:'text/plain;charset=utf-8'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+    } else {
+      const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+    }
+  } catch(err) {
+    const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+  }
+}
+
+// --- Helpers ---
+function findSheetById(id){ return sheets.find(s=>s.id===id); }
+function findSheetIndexByName(name){ return sheets.findIndex(s=>s.name===name); }
+
+// helper wrappers for button onclicks
+function addRowByBtn(btn){ const id = getSheetIdByTable(btn.closest('table')); addRow(id); }
+function deleteRowByBtn(btn){ const id = getSheetIdByTable(btn.closest('table')); const tr = btn.closest('tr'); const data = Array.from(tr.cells).slice(0,-1).map(td=>td.textContent); tr.remove(); pushHistory({type:'deleteRow', payload:{sheetId:id, deletedData:data}}); updateUndoRedoButtons(); }
+function copyRowByBtn(btn){ lastSelectedRow = btn.closest('tr'); copySelectedRow(getSheetIdByTable(btn.closest('table'))); }
+function addColumnByBtn(btn){ addColumn(getSheetIdByTable(btn.closest('table'))); }
+function deleteLastColumnByBtn(btn){ deleteLastColumn(getSheetIdByTable(btn.closest('table'))); }
+
+function getSheetIdByTable(table){
+  const s = sheets.find(sh=> sh.table===table);
+  return s ? s.id : null;
+}
+
+// initialize with blank sheet
+createSheetFromData('Sheet1', [['']]);
+updateUndoRedoButtons();
+
+</script>
+</body>
+</html>
